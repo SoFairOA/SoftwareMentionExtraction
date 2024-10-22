@@ -54,7 +54,17 @@ A workflow designed to harness the power of LLMs for automatic extraction of sof
     │   ├── predict.py          <- Code to run model inference with trained models          
     │   └── train.py            <- Code to train models
     │
+    ├── llm                     <- Contains code related to large language models (LLMs)
+    │   └── run_llm_SaT.py       <- Code for running LLM with SaT
+    │
+    ├── output                  <- Code related to generating outputs
+    │   └── output_generator_dir.py  <- Output generation script
+    │
+    ├── launcher                <- Code for launching the process
+    │   └── launcher.py         <- Code to launch the LLM process
+    │
     └── plots.py                <- Code to create visualizations
+
 ```
 
 --------
