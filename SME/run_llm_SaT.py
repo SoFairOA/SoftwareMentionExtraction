@@ -160,8 +160,8 @@ def process_text_from_parquet(parquet_file, model, split_type, window_size=None,
 
     #-----ITERATE OVER EACH ROW IN THE PARQUET FILE, EXTRACTING THE DOCUMENT ID AND TEXT FOR PROCESSING-----#
     for row in df_list:
-        document_id = row['id'].split('_')[0]  # Estrae l'ID del documento
-        document_text = row['text']  # Estrae il testo associato al documento
+        document_id = row['id'].split('_')[0]  
+        document_text = row['text']  
 
         logging.info(f"Processando il documento ID: {document_id} con split_type: {split_type}")
 
