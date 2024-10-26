@@ -13,7 +13,7 @@ import time
 import random
 from botocore.exceptions import ClientError
 
-SEMAPHORE_LIMIT = 1  
+SEMAPHORE_LIMIT = 10  
 semaphore = Semaphore(SEMAPHORE_LIMIT)
 
 #-----INITIALIZATION OF THE SaT MODEL FOR TEXT SEGMENTATION-----#
@@ -150,7 +150,7 @@ def get_prompt(prompt_type):
 
 
 #-----UPLOAD AND MANAGE DATA FROM PARQUET FILES-----#
-def process_text_from_parquet(parquet_file, model, split_type, window_size=None, overlap_sentences=None):
+def process_text_from_parquet(parquet_file, model, split_type, window_size=12, overlap_sentences=2):
     #-----UPLOAD AND CONVERT THE PARQUET FILE INTO A LIST OF RECORDS TO MINIMIZE THE OVERHEAD ASSOCIATED WITH THE DATAFRAME STRUCTURE-----#
     df = pd.read_parquet(parquet_file)
     df_list = df.to_records(index=False)
