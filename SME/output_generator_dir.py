@@ -9,12 +9,12 @@ def generate_output(softwares, start_time, end_time, prompt_used, document_type,
         return software_name.strip('→"').strip()
 
     def filter_non_software_mentions(software_list):
-        pattern = re.compile(r'(None|"None"|→|"→"|\s*There are no software names\s*|\s*There are no explicit software names\s*)', re.IGNORECASE)
+        pattern = re.compile(r'(None|"None"|Assistant|Assistant: →|"Assistant: →"|→|"→"|There are no software names|There are no explicit software names|[:])', re.IGNORECASE)        
         filtered = []
         for software in software_list:
-            normalized_software = normalize_software_name(software)
-            if not pattern.match(normalized_software):
-                filtered.append(normalized_software)
+            filtered_software = pattern.sub("", software).strip()
+            if filtered_software and not all(char in " :;," for char in filtered_software):
+                filtered.append(filtered_software)
         return filtered
     #------GENERATE AN INCREMENTAL NAME FOR GENERATED OUTPUT TO KEEP TRACK OF EACH RUN------#
     def get_incremental_filename(output_dir, base_name="runtime_results", extension="csv"):
