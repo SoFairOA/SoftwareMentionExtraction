@@ -26,4 +26,7 @@ asyncio
 time
 random
 botocore.exceptions
+datasets
+evaluate
+seqeval
 -e .
