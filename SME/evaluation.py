@@ -1,6 +1,7 @@
 import copy
 import json
 from argparse import ArgumentParser
+from pathlib import Path
 
 import evaluate
 import datasets
@@ -33,7 +34,8 @@ class LabelsTranslator:
         return example
 
 
-def load_and_check_datasets(results_path: str, gold_path: str, results_id: str, gold_id: str, results_field: str, gold_field: str, split: str = "test", config: str = None, hf_cache: str = None):
+def load_and_check_datasets(results_path: str, gold_path: str, results_id: str, gold_id: str, results_field: str, gold_field: str, split: str = "test", config: str = None,
+                            hf_cache: str = None, allow_subset: bool = False):
     """
     Load and check the datasets.
 
@@ -46,12 +48,31 @@ def load_and_check_datasets(results_path: str, gold_path: str, results_id: str, 
     :param split: Split of the gold dataset.
     :param config: Config name of the gold dataset. Is also used for determining type of results field.
     :param hf_cache: Path to the Hugging Face cache.
+    :param allow_subset: Allow subset of the gold dataset.
     :return: Gold and results datasets.
     """
 
+    extension = Path(results_path).suffix.lstrip(".")
     # load
+    try:
+        data_type = {
+            "json": "json",
+            "csv": "csv",
+            "tsv": "tsv",
+            "jsonl": "json",
+        }[extension]
+    except KeyError:
+        print(f"Unknown file format ({extension}). Exiting.")
+        exit(1)
 
-    results_dataset = load_dataset("json", data_files=results_path)["train"]
+    results_dataset = load_dataset(data_type, data_files=results_path)["train"]
+    if data_type != "json":
+        # hopped that it can be solved by defining Features, however it seemed that in that case it is necessary to define all fields
+        def convert_json_fields(example):
+            example[results_field] = json.loads(example[results_field])
+            return example
+        results_dataset = results_dataset.map(convert_json_fields)
+
     gold_dataset = load_dataset(gold_path, split=split, name=config, cache_dir=hf_cache)
 
     results_dataset = results_dataset.select_columns([results_id, results_field])
@@ -62,8 +83,11 @@ def load_and_check_datasets(results_path: str, gold_path: str, results_id: str, 
     gold_ids = set(gold_dataset[gold_id])
 
     if results_ids != gold_ids:
-        print("Results and gold are not aligned. Exiting.")
-        exit(1)
+        if (not allow_subset or not results_ids.issubset(gold_ids)):
+            print("Results and gold are not aligned. Exiting.")
+            exit(1)
+
+        gold_dataset = gold_dataset.filter(lambda x: x[gold_id] in results_ids)
 
     return gold_dataset, results_dataset
 
@@ -116,7 +140,7 @@ def sequence_labeling(args):
     """
 
     # load
-    gold_dataset, results_dataset = load_and_check_datasets(args.results, args.gold, args.results_id, args.id, args.prediction_field, args.gt_field, args.split, args.config, args.hf_cache)
+    gold_dataset, results_dataset = load_and_check_datasets(args.results, args.gold, args.results_id, args.id, args.prediction_field, args.gt_field, args.split, args.config, args.hf_cache, args.allow_subset)
 
     # translate the labels
     if not args.disable_translate and (hasattr(gold_dataset.features[args.gt_field], "feature") and hasattr(gold_dataset.features[args.gt_field].feature, "names")):
@@ -154,7 +178,7 @@ def document_level(args):
     """
 
     # load
-    gold_dataset, results_dataset = load_and_check_datasets(args.results, args.gold, args.results_id, args.id, args.prediction_field, args.gt_field, args.split, args.config, args.hf_cache)
+    gold_dataset, results_dataset = load_and_check_datasets(args.results, args.gold, args.results_id, args.id, args.prediction_field, args.gt_field, args.split, args.config, args.hf_cache, args.allow_subset)
 
     # align the results and gold
     gold, results = align_datasets(gold_dataset, results_dataset, args.results_id, args.id, args.prediction_field, args.gt_field)
@@ -218,7 +242,7 @@ def intent(args):
     :param args: User arguments.
     """
     # load
-    gold_dataset, results_dataset = load_and_check_datasets(args.results, args.gold, args.results_id, args.id, args.prediction_field, args.gt_field, args.split, args.config, args.hf_cache)
+    gold_dataset, results_dataset = load_and_check_datasets(args.results, args.gold, args.results_id, args.id, args.prediction_field, args.gt_field, args.split, args.config, args.hf_cache, args.allow_subset)
 
     # align the results and gold
     gold, results = align_datasets(gold_dataset, results_dataset, args.results_id, args.id, args.prediction_field, args.gt_field)
@@ -257,6 +281,7 @@ def main():
     sequence_labeling_parser.add_argument("-r", "--results_id", help="Name of field with unique identifier in the results dataset. Is used to make sure that the results and gold are aligned.", default="id")
     sequence_labeling_parser.add_argument("--hf_cache", help="Path to the Hugging Face cache.", default=None)
     sequence_labeling_parser.add_argument("--disable_translate", help="Disables translation of the results and gold.", action="store_true")
+    sequence_labeling_parser.add_argument("--allow_subset", help="Allow evaluation of subset of the gold dataset.", action="store_true")
     sequence_labeling_parser.set_defaults(func=sequence_labeling)
 
     document_level_parser = subparsers.add_parser("document_level", help="Document level evaluation.")
@@ -277,6 +302,7 @@ def main():
                                           help="Name of field with unique identifier in the results dataset. Is used to make sure that the results and gold are aligned.",
                                           default="id")
     document_level_parser.add_argument("--hf_cache", help="Path to the Hugging Face cache.", default=None)
+    document_level_parser.add_argument("--allow_subset", help="Allow evaluation of subset of the gold dataset.", action="store_true")
     document_level_parser.set_defaults(func=document_level)
 
     intent_parser = subparsers.add_parser("intent", help="Citation intent classification evaluation.")
@@ -297,6 +323,7 @@ def main():
                                        help="Name of field with unique identifier in the results dataset. Is used to make sure that the results and gold are aligned.",
                                        default="id")
     intent_parser.add_argument("--hf_cache", help="Path to the Hugging Face cache.", default=None)
+    intent_parser.add_argument("--allow_subset", help="Allow evaluation of subset of the gold dataset.", action="store_true")
     intent_parser.set_defaults(func=intent)
 
     args = parser.parse_args()
