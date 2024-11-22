@@ -1,11 +1,24 @@
 import copy
 import json
+import string
 from argparse import ArgumentParser
 from pathlib import Path
 
 import evaluate
 import datasets
 from datasets import load_dataset
+
+
+remove_punctuation_table = str.maketrans(string.punctuation, " " * len(string.punctuation))
+
+
+def normalize_sw_name(sw_name: str) -> str:
+    """
+    Normalizes software name.
+    :param sw_name: Software name.
+    :return: Normalized software name.
+    """
+    return sw_name.lower().translate(remove_punctuation_table).replace(" ", "")
 
 
 class LabelsTranslator:
@@ -196,15 +209,16 @@ def document_level(args):
     gold_properties_independent, results_properties_independent = copy.deepcopy(gold_properties), copy.deepcopy(gold_properties)
 
     for i in range(len(gold)):
-        gold_software_names.append(gold[i]["name"])
-        results_software_names.append([x["name"] for x in results[i]])
+        g_names_normalized = [normalize_sw_name(x) for x in gold[i]["name"]]
+        gold_software_names.append(g_names_normalized)
+        results_software_names.append([normalize_sw_name(x["name"]) for x in results[i]])
 
         for prop in gold_properties:
             gold_properties[prop].append([
-                f"{s_name} {p}" for i_s, s_name in enumerate(gold[i]["name"]) for p in gold[i][prop][i_s]
+                f"{s_name} {p}" for i_s, s_name in enumerate(g_names_normalized) for p in gold[i][prop][i_s]
             ])
             results_properties[prop].append([
-                f"{soft['name']} {p}" for i_s, soft in enumerate(results[i]) for p in soft[prop]
+                f"{normalize_sw_name(soft['name'])} {p}" for soft in results[i] for p in soft[prop]
             ])
 
             gold_properties_independent[prop].append([
