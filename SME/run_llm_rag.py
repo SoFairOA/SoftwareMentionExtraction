@@ -152,8 +152,6 @@ async def process_chunk_with_llm_async(llm, chunk, index, examples_section, docu
         If there are no entities, respond with [].\n
         Extract only what you read in the text, don't generate data, it's ok to not extract anything if it's not in the source text. STICK TO OUTPUT FORMAT""")
 
-        logger.info(f"examples:{examples_section}")
-
         try:
             response = await execute_with_retries(llm.abatch, inputs=[[system_message, human_message]])
             raw_content = response[0].content
@@ -176,6 +174,7 @@ async def process_chunk_with_llm_async(llm, chunk, index, examples_section, docu
 async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type, top_p, top_k, max_tokens, window_size, overlap_sentences, batch_processing):
     extracted_softwares_total = []
     grouped_data, window_size_used, overlap_used = process_text_from_parquet(parquet_file, split_type, window_size, overlap_sentences, batch_processing)
+
     start_time = datetime.now()
     logger.info(f"Starting processing at {start_time}")
     logger.info(f"Initializing LLM: {model_name}")
@@ -204,22 +203,27 @@ async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type
         )
         
     seen = set()
-    extracted_software_examples = [] 
-    max_iterations = 3  
-
+    prev_count = len(seen)
+    extracted_software_examples = []  
+    max_iterations = 10  
+    new_keywords = set()  
+    new_queries = set()
     for iteration in range(max_iterations):
         if iteration == 0:
             compiled_combined_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in KEYWORD_PATTERNS]
             logger.info(f"This is iteration 1 and the keywords are: {KEYWORD_PATTERNS}")
+            logger.info(f"This is iteration 1 and the queries are: {predefined_queries}")
         else:
             compiled_combined_patterns = convert_keywords_to_patterns(new_keywords)
             logger.info(f"This is iteration {iteration + 1} and the keywords are: {new_keywords}")
-
+            logger.info(f"This is iteration {iteration + 1} and the queries are: {new_queries}")
         logger.info(f"Starting iteration {iteration + 1}")
-        new_keywords = set()  
+
         iteration_results = []
 
-        MAX_EXAMPLES = 5  
+
+                
+        MAX_EXAMPLES = 25  
         if extracted_software_examples:
             limited_examples = extracted_software_examples[-MAX_EXAMPLES:]  
             examples_text = "\n".join(f"- {software}" for software in limited_examples)
@@ -230,8 +234,6 @@ async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type
             processed_chunks = set()
             new_chunks = [chunk for chunk in chunk_list if chunk not in processed_chunks]
             logger.info(f"Processing document {document_id} in iteration {iteration + 1}")
-
-            compiled_combined_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in KEYWORD_PATTERNS]
 
             filtered_chunks = keyword_based_filtering(new_chunks, compiled_combined_patterns)
             logger.info(f"Number of chunks after keyword-based filtering: {len(filtered_chunks)}")
@@ -245,7 +247,7 @@ async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type
                 logger.info(f"Number of chunks after semantic similarity filtering: {len(relevant_chunks)}")
             else:
                 threshold = 0.3 + 0.1 * iteration
-                relevant_chunks = semantic_similarity_filter_torch(filtered_chunks, predefined_queries, threshold=threshold)
+                relevant_chunks = semantic_similarity_filter_torch(filtered_chunks, list(new_queries), threshold=threshold)
                 logger.info(f"Number of chunks after semantic similarity filtering: {len(relevant_chunks)}")
             
             if not relevant_chunks:
@@ -253,6 +255,7 @@ async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type
                 continue
 
             tasks = [process_chunk_with_llm_async(llm, chunk, i, examples_section, document_id) for i, chunk in enumerate(relevant_chunks)]
+            
             results = await asyncio.gather(*tasks)
             processed_chunks.update(new_chunks)
 
@@ -264,11 +267,15 @@ async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type
                 extracted_entities.extend(unique_entities)
 
             if extracted_entities:
-                verified_entities = await verify_extracted_entities(llm, extracted_entities, batch_size=5)
+                verified_entities = await verify_extracted_entities(
+                    llm, extracted_entities, batch_size=5
+                )
             else:
                 verified_entities = []
 
-            extracted_software_examples.extend([entity["software"] for entity in verified_entities if "software" in entity and entity["software"]])
+            extracted_software_examples.extend(
+                [entity["software"] for entity in verified_entities if "software" in entity and entity["software"]]
+            )
 
             iteration_results.append(
                 {
@@ -283,7 +290,8 @@ async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type
                     if isinstance(software, list):
                         for s in software:
                             if s not in seen:
-                                predefined_queries.append(s)
+                                # predefined_queries.append(s)
+                                new_queries.add(s)
                                 new_keywords.add(s)  
                                 seen.add(s)
                                 logger.info(f"seen: {seen}")
@@ -292,14 +300,14 @@ async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type
                                 pass
                     elif isinstance(software, str):
                         if software not in seen:
-                            predefined_queries.append(software)
+                            # predefined_queries.append(software)
+                            new_queries.add(software)
                             new_keywords.add(software)  
                             seen.add(software)
                             logger.info(f"seen: {seen}")
                             logger.info("Added new keyword and query: %s", software)
                         else:
                             pass
-            
             # After updating keywords and queries, clear the query embedding cache
             # query_embedding_cache.clear()
             # logger.info("Cleared query embedding cache after processing document %s", document_id)
@@ -307,9 +315,13 @@ async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type
 
         extracted_softwares_total.extend(iteration_results)
 
-        if not new_keywords:
-            logger.info("No new keywords found, stopping refinement.")
+        current_count = len(seen)
+        logger.info(f"prev count = {prev_count}")
+        logger.info(f"current count = {current_count}")
+        if current_count == prev_count:
+            logger.info("No new keywords found in this iteration, stopping.")
             break
+        prev_count = current_count
 
 
     if not extracted_softwares_total:
@@ -323,7 +335,7 @@ async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type
         extracted_softwares_total.append(
             {
                 "document_id": document_id,
-                "softwares": [],  
+                "softwares": [], 
             }
         )
 
