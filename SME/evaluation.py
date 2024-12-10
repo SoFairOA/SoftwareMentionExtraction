@@ -1,5 +1,6 @@
 import copy
 import json
+import re
 import string
 from argparse import ArgumentParser
 from pathlib import Path
@@ -19,6 +20,20 @@ def normalize_sw_name(sw_name: str) -> str:
     :return: Normalized software name.
     """
     return sw_name.lower().translate(remove_punctuation_table).replace(" ", "")
+
+
+def normalize_version(version: str) -> str:
+    """
+    Normalizes version.
+    :param version: Version.
+    :return: Normalized version.
+    """
+
+    version = version.lower()
+
+    version = re.sub(r"\b(v|ver|version|release|rel|build|b|patch|p|update|u|edition|ed|e|)\b", "", version)
+
+    return version.translate(remove_punctuation_table).replace(" ", "")
 
 
 class LabelsTranslator:
@@ -105,6 +120,22 @@ def load_and_check_datasets(results_path: str, gold_path: str, results_id: str, 
     return gold_dataset, results_dataset
 
 
+def dict_of_lists_to_list_of_dicts(d: dict) -> list[dict]:
+    """
+    Converts dictionary of lists to list of dictionaries.
+
+    It is assumed that all lists have the same length.
+
+    :param d: Dictionary of lists.
+    :return: List of dictionaries.
+    """
+
+    first_length = len(d[list(d.keys())[0]])
+    assert all(len(v) == first_length for v in d.values()), "All lists must have the same length."
+
+    return [{k: v[i] for k, v in d.items()} for i in range(first_length)]
+
+
 def align_datasets(gold_dataset, results_dataset, results_id: str, gold_id: str, results_field: str, gold_field: str) \
         -> tuple[list, list]:
     """
@@ -124,8 +155,14 @@ def align_datasets(gold_dataset, results_dataset, results_id: str, gold_id: str,
     gold, results = [], []
     results_mapping = {example[results_id]: example[results_field] for example in results_dataset}
     for gold_example in gold_dataset:
-        gold.append(gold_example[gold_field])
-        results.append(results_mapping[gold_example[gold_id]])
+        gold.append(
+            gold_example[gold_field] if isinstance(gold_example[gold_field], list) else dict_of_lists_to_list_of_dicts(gold_example[gold_field])
+        )
+
+        r = results_mapping[gold_example[gold_id]]
+        if isinstance(r, dict):
+            r = dict_of_lists_to_list_of_dicts(r)
+        results.append(r)
 
     return gold, results
 
@@ -143,6 +180,20 @@ def convert_numpy_types(d: dict) -> dict:
         elif hasattr(v, "item"):
             d[k] = v.item()
     return d
+
+
+def map_seq_labels(path_to_mapping: str, labels: list[list[int]]) -> list[list[int]]:
+    """
+    Maps sequence labels.
+
+    :param path_to_mapping: Path to the mapping file.
+    :param labels: Labels to map.
+    :return: Mapped labels.
+    """
+    with open(path_to_mapping, "r") as f:
+        mapping = json.load(f)
+
+    return [[mapping.get(label, label) for label in seq] for seq in labels]
 
 
 def sequence_labeling(args):
@@ -178,10 +229,51 @@ def sequence_labeling(args):
 
     # evaluate
     seqeval = evaluate.load("seqeval")
+
+    if args.results_mapping is not None:
+        results = map_seq_labels(args.results_mapping, results)
+
+    if args.gold_mapping is not None:
+        gold = map_seq_labels(args.gold_mapping, gold)
+
     eval_res = seqeval.compute(predictions=results, references=gold)
     # convert all numpy types to python types, so we can serialize it to json
     eval_res = convert_numpy_types(eval_res)
     print(json.dumps(eval_res))
+
+
+def map_software_attribute_names(path_to_mapping: str, software: list[list[dict]]) -> list[list[dict]]:
+    """
+    Maps software attributes.
+
+    :param path_to_mapping: Path to the mapping file.
+    :param software: Software attributes to map.
+    :return: Mapped software attributes.
+    """
+    with open(path_to_mapping, "r") as f:
+        mapping = json.load(f)
+
+    new_software = []
+
+    for sample in software:
+        new_sample = []
+        for soft in sample:
+            new_soft = {}
+            for k, v in soft.items():
+                mapped_k = mapping.get(k, k)
+                if mapped_k is None:
+                    continue
+
+                if mapped_k in new_soft:
+                    new_soft[mapped_k].extend(v)
+                else:
+                    new_soft[mapped_k] = v
+
+            new_sample.append(new_soft)
+
+        new_software.append(new_sample)
+
+    return new_software
 
 
 def document_level(args):
@@ -196,6 +288,12 @@ def document_level(args):
     # align the results and gold
     gold, results = align_datasets(gold_dataset, results_dataset, args.results_id, args.id, args.prediction_field, args.gt_field)
 
+    if args.results_mapping is not None:
+        results = map_software_attribute_names(args.results_mapping, results)
+
+    if args.gold_mapping is not None:
+        gold = map_software_attribute_names(args.gold_mapping, gold)
+
     # parse software names
     gold_software_names, results_software_names = [], []
 
@@ -208,25 +306,37 @@ def document_level(args):
     results_properties = copy.deepcopy(gold_properties)
     gold_properties_independent, results_properties_independent = copy.deepcopy(gold_properties), copy.deepcopy(gold_properties)
 
+    norm_for_properties = {
+        "version": normalize_version,
+        "publisher": normalize_sw_name,
+        "url": lambda x: x,
+        "language": lambda x: x.lower()
+    }
+
     for i in range(len(gold)):
-        g_names_normalized = [normalize_sw_name(x) for x in gold[i]["name"]]
+        g_names_normalized = [normalize_sw_name(x["name"]) for x in gold[i]]
         gold_software_names.append(g_names_normalized)
         results_software_names.append([normalize_sw_name(x["name"]) for x in results[i]])
 
         for prop in gold_properties:
+            if len(gold[i]) > 0 and prop not in gold[i][0]:
+                continue
+
+            prop_norm = norm_for_properties[prop] if args.normalize_properties else lambda x: x
+
             gold_properties[prop].append([
-                f"{s_name} {p}" for i_s, s_name in enumerate(g_names_normalized) for p in gold[i][prop][i_s]
+                f"{s_name} {prop_norm(p)}" for i_s, s_name in enumerate(g_names_normalized) for p in gold[i][i_s][prop]
             ])
             results_properties[prop].append([
-                f"{normalize_sw_name(soft['name'])} {p}" for soft in results[i] for p in soft[prop]
+                f"{normalize_sw_name(soft['name'])} {prop_norm(p)}" for soft in results[i] for p in soft[prop]
             ])
 
             gold_properties_independent[prop].append([
-                p for i_s, s_name in enumerate(gold[i]["name"]) for p in gold[i][prop][i_s]
+                prop_norm(p) for soft in gold[i] for p in soft[prop]
             ])
 
             results_properties_independent[prop].append([
-                p for i_s, soft in enumerate(results[i]) for p in soft[prop]
+                prop_norm(p) for soft in results[i] for p in soft[prop]
             ])
 
     # evaluate
@@ -241,8 +351,9 @@ def document_level(args):
 
     # evaluate properties
     for prop in gold_properties:
-        eval_res = doc_level.compute(predictions=results_properties[prop], references=gold_properties[prop])
         print(f"Document level {prop} extraction evaluation:")
+        print(doc_level.compute(predictions=results_properties[prop][:10], references=gold_properties[prop][:10]))
+        eval_res = doc_level.compute(predictions=results_properties[prop], references=gold_properties[prop])
         print("\t" + json.dumps(eval_res))
         print("\tIndependent evaluation:")
         eval_res = doc_level.compute(predictions=results_properties_independent[prop], references=gold_properties_independent[prop])
@@ -296,6 +407,8 @@ def main():
     sequence_labeling_parser.add_argument("--hf_cache", help="Path to the Hugging Face cache.", default=None)
     sequence_labeling_parser.add_argument("--disable_translate", help="Disables translation of the results and gold.", action="store_true")
     sequence_labeling_parser.add_argument("--allow_subset", help="Allow evaluation of subset of the gold dataset.", action="store_true")
+    sequence_labeling_parser.add_argument("--results_mapping", help="Mapping used to transform labels (json file). Could be used to convert labels from different datasets to the same format.", default=None)
+    sequence_labeling_parser.add_argument("--gold_mapping", help="Mapping used to transform labels (json file). Could be used to convert labels from different datasets to the same format.", default=None)
     sequence_labeling_parser.set_defaults(func=sequence_labeling)
 
     document_level_parser = subparsers.add_parser("document_level", help="Document level evaluation.")
@@ -317,6 +430,9 @@ def main():
                                           default="id")
     document_level_parser.add_argument("--hf_cache", help="Path to the Hugging Face cache.", default=None)
     document_level_parser.add_argument("--allow_subset", help="Allow evaluation of subset of the gold dataset.", action="store_true")
+    document_level_parser.add_argument("--normalize_properties", help="Normalize properties.", action="store_true")
+    document_level_parser.add_argument("--results_mapping", help="Mapping used to transform software attributes (json file). Could be used to convert labels from different datasets to the same format.", default=None)
+    document_level_parser.add_argument("--gold_mapping", help="Mapping used to transform software attributes (json file). Could be used to convert labels from different datasets to the same format.", default=None)
     document_level_parser.set_defaults(func=document_level)
 
     intent_parser = subparsers.add_parser("intent", help="Citation intent classification evaluation.")
