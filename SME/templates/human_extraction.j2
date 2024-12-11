@@ -1,0 +1,18 @@
+Hello Professor John! Please read very carefully the text i will provide to you and extract only software, URLs, and programming languages and return them in strict JSON array format.
+
+Text:
+{{ chunk }}
+
+Return your response in the following format:
+[
+{
+    "software": "<software_name>", 
+    "version": ["<software_version>"],
+    "publisher": ["<software_publisher>"], 
+    "url": ["<software_url>"], 
+    "programming_language": ["<software_language>"]
+}
+]
+
+If there are no entities, respond with [].
+Extract only what you read in the text, don't generate data.

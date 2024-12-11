@@ -23,7 +23,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 from torch.nn.functional import cosine_similarity as torch_cosine_similarity
 from typing import List, Dict, Any
-
+from datasets import load_dataset
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -666,20 +666,39 @@ def segment_text_with_overlap(text, num_sentences_per_chunk, overlap_sentences):
 
     return chunks
 
-def process_text_from_parquet(parquet_file, split_type, window_size, overlap_sentences, batch_processing, cache_dir="cache"):
+def process_text_from_parquet(parquet_file, split_type, window_size, overlap_sentences, batch_processing, cache_dir="cache", limit=None):
     os.makedirs(cache_dir, exist_ok=True)
-    cache_path = os.path.join(cache_dir, f"{Path(parquet_file).stem}_{split_type}_{window_size}_{overlap_sentences}_cache_2.json")
+    
+    # Costruisci il nome del file di cache
+    cache_filename = f"{Path(parquet_file).stem}_{split_type}_{window_size}_{overlap_sentences}"
+    if limit is not None:
+        cache_filename += f"_limit{limit}"
+    cache_filename += "_cache_2.json"
+    
+    cache_path = os.path.join(cache_dir, cache_filename)
     
     if os.path.exists(cache_path):
-        logger.info("Loading cached split results.")
+        logger.info(f"Loading cached split results from {cache_path}.")
         cached_results = load_from_cache(cache_path)
         return cached_results['chunks_by_document'], cached_results['num_sentences_per_chunk'], cached_results['overlap_sentences']
     
     df = pd.read_parquet(parquet_file)
+
+    if limit is not None:
+        df = df.iloc[:limit]
+
     chunks_by_document = {}
     num_sentences_per_chunk, overlap_sentences = window_size, overlap_sentences
     
-    batch_size = nlp.batch_size if batch_processing else len(df)
+    if batch_processing:
+        try:
+            batch_size = nlp.batch_size
+            logger.info(f"Using batch_size from nlp.batch_size: {batch_size}")
+        except NameError:
+            logger.warning("nlp.batch_size is not defined. Using default batch size 100.")
+            batch_size = 100
+    else:
+        batch_size = len(df)
 
     for i in range(0, len(df), batch_size):
         batch = df.iloc[i:i + batch_size]
@@ -700,6 +719,84 @@ def process_text_from_parquet(parquet_file, split_type, window_size, overlap_sen
         "overlap_sentences": overlap_sentences
     }
     save_to_cache(cache_data, cache_path)
+    logger.info(f"Data cached at {cache_path}.")
+    return chunks_by_document, num_sentences_per_chunk, overlap_sentences
+
+
+
+def process_text_from_hf_parquet(repo_id, config_name, split_name, window_size, overlap_sentences, batch_processing, cache_dir="cache", limit=None):
+    """
+    Carica il dataset da Hugging Face utilizzando load_dataset,
+    converte in DataFrame Pandas, processa come fatto per il Parquet locale,
+    poi cachea i risultati.
+    """
+    os.makedirs(cache_dir, exist_ok=True)
+    
+    # Costruisci il nome del file di cache
+    cache_filename = f"{config_name}_{split_name}_{window_size}_{overlap_sentences}"
+    if limit is not None:
+        cache_filename += f"_limit{limit}"
+    cache_filename += "_cache.json"
+    
+    cache_path = os.path.join(cache_dir, cache_filename)
+
+    if os.path.exists(cache_path):
+        logger.info(f"Loading cached split results from {cache_path}.")
+        cached_results = load_from_cache(cache_path)
+        return cached_results['chunks_by_document'], cached_results['num_sentences_per_chunk'], cached_results['overlap_sentences']
+
+    try:
+        logger.info(f"Loading dataset from repository: {repo_id}, config: {config_name}, split: {split_name}")
+        dataset = load_dataset(repo_id, config_name, split=split_name)
+        logger.info("Dataset loaded successfully.")
+    except Exception as e:
+        logger.error(f"Error loading dataset: {e}")
+        raise
+
+    df = dataset.to_pandas()
+
+    if limit is not None:
+        df = df.iloc[:limit]
+
+    chunks_by_document = {}
+    num_sentences_per_chunk = window_size
+
+    if batch_processing:
+        try:
+            batch_size = nlp.batch_size
+            logger.info(f"Using batch_size from nlp.batch_size: {batch_size}")
+        except NameError:
+            logger.warning("nlp.batch_size is not defined. Using default batch size 100.")
+            batch_size = 100
+    else:
+        batch_size = len(df)
+        logger.info(f"Using batch_size equal to the number of records: {batch_size}")
+
+    for i in range(0, len(df), batch_size):
+        batch = df.iloc[i:i+batch_size]
+        for _, row in tqdm(batch.iterrows(), desc=f"Processing batch {i // batch_size + 1}", total=len(batch)):
+            document_id, document_text = row['id'], row['text']
+            if not isinstance(document_id, str) or not isinstance(document_text, str):
+                logger.warning(f"Record missing 'id' or 'text' as string: {row}")
+                continue
+            
+            if split_name == "complete":
+                chunks_by_document[document_id] = [document_text]
+            else:
+                chunks = segment_text_with_overlap(document_text, num_sentences_per_chunk, overlap_sentences)
+                chunks_by_document[document_id] = chunks
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.info("CUDA cache cleared.")
+
+    cache_data = {
+        "chunks_by_document": chunks_by_document,
+        "num_sentences_per_chunk": num_sentences_per_chunk,
+        "overlap_sentences": overlap_sentences
+    }
+    save_to_cache(cache_data, cache_path)
+    logger.info(f"Dataset processing completed and cached at {cache_path}.")
     return chunks_by_document, num_sentences_per_chunk, overlap_sentences
 
 

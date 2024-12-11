@@ -7,16 +7,30 @@ from langchain_aws import ChatBedrock
 from langchain.schema import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from utils import semaphore, KEYWORD_PATTERNS, keyword_based_filtering, semantic_similarity_filter_torch, segment_text_with_overlap, process_text_from_parquet, extract_json_from_response, get_chunk_embedding, get_query_embedding, convert_keywords_to_patterns, normalize_keyword, programming_language_description, url_description, software_description, url_sentences, software_sentences, programming_language_sentences, save_extracted_entities, predefined_queries, query_embedding_cache, execute_with_retries
-
+from jinja2 import Environment, FileSystemLoader
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+env = Environment(loader=FileSystemLoader("templates"))
 
 
 async def process_chunk_with_llm_async(llm, chunk, index):
     async with semaphore:
         logging.info(f"Processing chunk {index} with chosen model...")
+        # system_extraction_template = env.get_template("system_extraction.j2")
+        # human_extraction_template = env.get_template("human_extraction.j2")
 
+        # system_message = SystemMessage(content=system_extraction_template.render(
+        #     software_description=software_description,
+        #     url_description=url_description,
+        #     programming_language_description=programming_language_description,
+        #     software_sentences="\n".join(software_sentences),
+        #     url_sentences="\n".join(url_sentences),
+        #     programming_language_sentences="\n".join(programming_language_sentences),
+        #     # examples_section=examples_section
+        # ))
+
+        # human_message = HumanMessage(content=human_extraction_template.render(chunk=chunk))
         system_message = SystemMessage(content=f"""
         You are Professor John, an expert in entity extraction, tasked with identifying mentions of software, URLs, and programming languages in academic research text. Follow the descriptions and examples below for guidance on each category:\n
 
@@ -99,7 +113,7 @@ async def process_chunk_with_llm_async(llm, chunk, index):
         DO NOT USE EXAMPLES PROVIDED AS OUTPUT. STICK TO OUTPUT FORMAT
         """)
 
-        user_message = HumanMessage(content=f"""Hello Professor John! Please read very carefully the text i will provide to you and extract only software, URLs, and programming languages and return them in strict JSON array format. As you usually do think step by step.\n
+        human_message = HumanMessage(content=f"""Hello Professor John! Please read very carefully the text i will provide to you and extract only software, URLs, and programming languages and return them in strict JSON array format. As you usually do think step by step.\n
 
         Text:\n
         {chunk}
@@ -121,7 +135,7 @@ async def process_chunk_with_llm_async(llm, chunk, index):
 
         
         try:
-            response = await execute_with_retries(llm.abatch, inputs=[[system_message, user_message]])
+            response = await execute_with_retries(llm.abatch, inputs=[[system_message, human_message]])
             raw_content = response[0].content
             logging.info(f"Raw model response for chunk {index}: {raw_content}")
 
@@ -153,6 +167,7 @@ async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type
     if "claude" in model_name:
         llm = ChatBedrock(
             model_id=model_name,
+            verbose=False,
             region_name="eu-central-1",
             model_kwargs=dict(
                 temperature=temperature, 
@@ -164,6 +179,7 @@ async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type
     else:
         llm = ChatOpenAI(
             model=model_name,
+            verbose=False,
             openai_api_base=os.getenv("OPENAI_BASE_URL"),
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             temperature=temperature,

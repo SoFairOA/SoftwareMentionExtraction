@@ -90,9 +90,25 @@ class JSONLProcessor:
             "N/A",
             "Ver. ",
             "-",
-            ""
+            "",
+            "?",
+            "<not applicable>",
+            "not applicable",
+            "(not applicable)",
+            "<not_specified>",
+            "not specified",
+            "(not specified)",
+            "Not specified",
+            "not available",
+            "<not available>",
+            "(not available)",
+            "not mentioned",
+            "<not mentioned>",
+            "(not mentioned)"
+            
         }
 
+        # Normalizza i placeholders
         normalized_placeholders = set(normalize_string(p) for p in placeholders)
 
         def clean_version(version_list):
@@ -137,10 +153,11 @@ class JSONLProcessor:
                     if 'name' in software and isinstance(software['name'], str):
                         software['name'] = software['name'].strip()
                         name_normalized = normalize_string(software['name'])
+                        # Verifica se il name normalizzato è un placeholder
                         if not software['name'] or name_normalized in normalized_placeholders:
-                            continue 
+                            continue  # Salta questo software se il name è un placeholder
                     else:
-                        continue  
+                        continue  # Salta se il campo 'name' non è valido
 
                     for field in ["version", "publisher", "url", "language"]:
                         if field in software:
@@ -164,8 +181,9 @@ class JSONLProcessor:
                     }
 
                     name_normalized = normalize_string(software_entry['name'])
+                    # Verifica se il name normalizzato è un placeholder
                     if not software_entry['name'] or name_normalized in normalized_placeholders:
-                        continue  
+                        continue  # Salta questo software se il name è un placeholder
 
                     for field in ["version", "publisher", "url", "language"]:
                         if isinstance(software_entry[field], str):
@@ -184,26 +202,43 @@ class JSONLProcessor:
 
         deduplicated_grouped_data = []
         for doc_id, doc_content in grouped_data.items():
-            seen_keys = set()
+            seen_keys = set()  # Contiene le chiavi di deduplicazione già viste
             deduped_software = []
             for software in doc_content['software']:
-                name = software.get('name', '')
+                name = software.get('name', '').strip()
                 if not name:
-                    continue 
+                    continue  # Salta se il nome non è valido
+
+                # Normalizza i campi rilevanti per la deduplicazione
                 name_normalized = normalize_string(name)
                 version_list = software.get('version', [])
-                version_normalized = ','.join([normalize_string(v) for v in version_list]) if version_list else ''
-                key = (name_normalized, version_normalized)
+                publisher_list = software.get('publisher', [])
+                language_list = software.get('language', [])
+                url_list = software.get('url', [])
+
+                # Crea una chiave unica basata su tutti i campi rilevanti
+                key = (
+                    name_normalized,
+                    ','.join([normalize_string(v) for v in version_list]),
+                    ','.join([normalize_string(p) for p in publisher_list]),
+                    ','.join([normalize_string(l) for l in language_list]),
+                    ','.join([normalize_string(u) for u in url_list]),
+                )
+
+                # Verifica se la chiave è già stata vista
                 if key not in seen_keys:
                     seen_keys.add(key)
                     deduped_software.append(software)
                 else:
                     print(f"Duplicate found in document {doc_id}: {software}")
+
+            # Aggiungi il documento deduplicato
             deduplicated_document = {
                 "id": doc_id,
                 "software": deduped_software
             }
             deduplicated_grouped_data.append(deduplicated_document)
+
 
         return deduplicated_grouped_data
 
