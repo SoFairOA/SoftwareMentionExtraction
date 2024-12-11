@@ -6,7 +6,7 @@ import asyncio
 from langchain_aws import ChatBedrock
 from langchain.schema import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from utils import semaphore, KEYWORD_PATTERNS, keyword_based_filtering, semantic_similarity_filter_torch, segment_text_with_overlap, process_text_from_parquet, extract_json_from_response, get_chunk_embedding, get_query_embedding, convert_keywords_to_patterns, normalize_keyword, programming_language_description, url_description, software_description, url_sentences, software_sentences, programming_language_sentences, save_extracted_entities, predefined_queries, query_embedding_cache, execute_with_retries
+from utils import semaphore, KEYWORD_PATTERNS, keyword_based_filtering, semantic_similarity_filter_torch, segment_text_with_overlap, process_text_from_parquet, process_text_from_hf_parquet, extract_json_from_response, get_chunk_embedding, get_query_embedding, convert_keywords_to_patterns, normalize_keyword, programming_language_description, url_description, software_description, url_sentences, software_sentences, programming_language_sentences, save_extracted_entities, predefined_queries, query_embedding_cache, execute_with_retries
 from jinja2 import Environment, FileSystemLoader
 
 logging.basicConfig(level=logging.INFO)
@@ -151,14 +151,55 @@ async def process_chunk_with_llm_async(llm, chunk, index):
             logging.error(f"Error processing chunk {index}: {e}")
             return index, []
 
-async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type, top_p, top_k, max_tokens, window_size, overlap_sentences, batch_processing):
-    grouped_data, window_size_used, overlap_used = process_text_from_parquet(
-        parquet_file, 
-        split_type, 
-        window_size, 
-        overlap_sentences, 
-        batch_processing
-    )   
+async def run_llm_with_parquet(
+    parquet_file,
+    repo_id,
+    config_name,
+    split_name,
+    model_name,
+    temperature,
+    split_type,
+    top_p,
+    top_k,
+    max_tokens,
+    window_size,
+    overlap_sentences,
+    batch_processing,
+    limit=None  
+):    
+    if repo_id and config_name:
+        logger.info("Loading dataset from Hugging Face.")
+        grouped_data, window_size_used, overlap_used = process_text_from_hf_parquet(
+            repo_id=repo_id,
+            config_name=config_name,
+            split_name=split_name,
+            window_size=window_size,
+            overlap_sentences=overlap_sentences,
+            batch_processing=batch_processing,
+            limit=limit  
+        )
+    elif parquet_file:
+        logger.info("Loading dataset from local Parquet file.")
+        grouped_data, window_size_used, overlap_used = process_text_from_parquet(
+            parquet_file,
+            split_type,
+            window_size,
+            overlap_sentences,
+            batch_processing,
+            limit=limit  #
+        )
+    else:
+        logger.error("Invalid parameters for loading dataset.")
+        raise ValueError("Invalid parameters for loading dataset.")
+
+
+    if limit is not None:
+
+        limited_grouped_data = {}
+        doc_keys = list(grouped_data.keys())[:limit]
+        for k in doc_keys:
+            limited_grouped_data[k] = grouped_data[k]
+        grouped_data = limited_grouped_data
      
     start_time = datetime.now()
     logger.info(f"Starting processing at {start_time}")
@@ -205,3 +246,4 @@ async def run_llm_with_parquet(parquet_file, model_name, temperature, split_type
     logger.info(f"Finished processing all documents. Total time taken: {end_time - start_time}")
     
     return extracted_softwares_total, start_time, end_time, "PARQUET", top_p, top_k, max_tokens, split_type, window_size_used, overlap_used
+
