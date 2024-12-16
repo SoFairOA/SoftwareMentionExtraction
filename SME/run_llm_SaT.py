@@ -13,7 +13,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 env = Environment(loader=FileSystemLoader("templates"))
 
-
 async def process_chunk_with_llm_async(llm, chunk, index):
     async with semaphore:
         logging.info(f"Processing chunk {index} with chosen model...")
@@ -56,17 +55,19 @@ async def process_chunk_with_llm_async(llm, chunk, index):
         
         **To extract entities correctly, follow these steps**:\n
         1. **Identify and extract the software name**: Look for specific software tools, platforms, or programs explicitly mentioned in the text. Make sure the software name is stated clearly and explicitly, not as part of a generic term like 'tool' or 'platform'.\n
-        2. **Check if a version is mentioned**: After identifying the software, check if a version number or specific edition is mentioned. If no version is mentioned, use "N/A" as the version.\n
+        2. **Check if a version is mentioned**: After identifying the software, check if a version number or specific edition is mentioned. If no version is mentioned, leave the field empty.\n
         3. **Check if a URL is associated with the software**: Look for any URL that is directly associated with the software mentioned in the text. If a URL is explicitly given, include it in the output.\n
         4. **Identify any programming languages mentioned**: Check if any programming language is mentioned, especially if it is related to the software or research method. If found, include the language and its version if available.\n
-
-                
+        5. **Identify the Publisher**: For each software entity extracted check if there is a publisher associated to it.\n
+        
         **Rules**:\n
         1. Extract only explicitly named software, URLs, and programming languages.\n
         2. URLs should only be extracted if they are directly related to a software. If a software is mentioned, include its associated URL if available.\n
         3. Programming languages should only be included if they are related to the software. For example, if `SciPy` is mentioned with `Python`, include Python under the `"language"` field for SciPy.\n
+        4. Publishers should be extracted only if directly stated in the text, not desumed from your knowledge.
         4. Respond strictly in JSON array format and **nothing else**.\n
-
+        5. If you don't find informations to fill the fields in the JSON array you must reproduce the structure as it is leaving the fields blank: []
+        
         **Examples**:\n
         Format each identified entity as follows:\n
         Correct output:\n
@@ -75,31 +76,11 @@ async def process_chunk_with_llm_async(llm, chunk, index):
         {{
             "software": "<software_name>",
             "version": ["<software_version>"], 
-            "publisher": ["<software_publisher>"]
+            "publisher": ["<software_publisher>"],
             "url": ["<software_url>"], 
             "language": ["<software_language>"]
         }},
-        {{
-            "software": "<software_name>",
-            "version": ["<software_version>"], 
-            "publisher": "<software_publisher>"
-            "url": ["<software_url>"], 
-            "language": ["<software_language>"]
-        }},
-        {{
-            "software": "<software_name>",
-            "version": ["<software_version>"], 
-            "publisher": ["<software_publisher>"]
-            "url": ["<software_url>"], 
-            "language": ["<software_language>"]
-        }}
-        {{
-            "software": "<software_name>", 
-            "version": ["<software_version>"],             
-            "publisher": ["<software_publisher>"], 
-            "url": ["<software_url>"], 
-            "language": ["<software_language>"]
-        }}
+        ...
         ]
 
         Incorrect output:\n
@@ -110,7 +91,7 @@ async def process_chunk_with_llm_async(llm, chunk, index):
         When there are no entities to extract, respond only with: [].\n
 
         Return only the JSON array of identified entities and no other text. Follow the format precisely, or the response will be invalid.\n
-        DO NOT USE EXAMPLES PROVIDED AS OUTPUT. STICK TO OUTPUT FORMAT
+        DO NOT USE EXAMPLES PROVIDED AS OUTPUT. STICK TO OUTPUT FORMAT. DO NOT ASSUME INFORMATION THAT AREN'T PRESENT IN THE TEXT.
         """)
 
         human_message = HumanMessage(content=f"""Hello Professor John! Please read very carefully the text i will provide to you and extract only software, URLs, and programming languages and return them in strict JSON array format. As you usually do think step by step.\n
@@ -173,6 +154,7 @@ async def run_llm_with_parquet(
             repo_id=repo_id,
             config_name=config_name,
             split_name=split_name,
+            split_type=split_type,
             window_size=window_size,
             overlap_sentences=overlap_sentences,
             batch_processing=batch_processing,
@@ -246,4 +228,3 @@ async def run_llm_with_parquet(
     logger.info(f"Finished processing all documents. Total time taken: {end_time - start_time}")
     
     return extracted_softwares_total, start_time, end_time, "PARQUET", top_p, top_k, max_tokens, split_type, window_size_used, overlap_used
-

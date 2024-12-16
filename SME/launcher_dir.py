@@ -8,6 +8,7 @@ import logging
 import os
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 def main():
     parser = argparse.ArgumentParser(description="Run LLM processing on a Parquet file or a Hugging Face dataset with optional caching.")
     parser.add_argument("--pipeline", type=str, choices=["SaT", "RAG"], required=True, help="Choose the pipeline to run: 'SaT' or 'RAG'.")
@@ -18,12 +19,12 @@ def main():
     parser.add_argument("--limit", type=int, help="Limit the number of documents to process.")
     parser.add_argument("--output_dir", type=str, required=True, help="Directory to save output results.")
     parser.add_argument("--model", type=str, required=True, help="Model name for processing.")
-    parser.add_argument("--temperature", type=float, default=0.7, help="Temperature for model.")
-    parser.add_argument("--top_p", type=float, default=1.0, help="Top p sampling.")
+    parser.add_argument("--temperature", type=float, default=0.06, help="Temperature for model.")
+    parser.add_argument("--top_p", type=float, default=0.8, help="Top p sampling.")
     parser.add_argument("--top_k", type=int, default=10, help="Top k sampling.")
-    parser.add_argument("--split_type", type=str, choices=["sentence", "paragraph", "complete"], default="paragraph", help="Split type.")
-    parser.add_argument("--window_size", type=int, default=20, help="Number of sentences per chunk.")
-    parser.add_argument("--overlap_sentences", type=int, default=2, help="Number of overlapping sentences.")
+    parser.add_argument("--split_type", type=str, choices=["sentence", "paragraph", "complete"], help="Split type.")
+    parser.add_argument("--window_size", type=int, help="Number of sentences per chunk.")
+    parser.add_argument("--overlap_sentences", type=int, help="Number of overlapping sentences.")
     parser.add_argument("--batch_processing", action="store_true", help="Process documents in batches if set.")
     parser.add_argument("--max_tokens", type=int, default=2048, help="The maximum number of tokens the model can generate")
     args = parser.parse_args()
@@ -35,13 +36,11 @@ def main():
     else:
         logger.warning("HUGGINGFACE_HUB_TOKEN is not set. Make sure you are logged in with `huggingface-cli login` if needed.")
 
-    # Validazione degli argomenti: o parquet_file o repo_id e config_name
     if not args.parquet_file and not (args.repo_id and args.config_name):
         raise ValueError("You must specify either --parquet_file for a local file or both --repo_id and --config_name for a Hugging Face dataset.")
     if args.parquet_file and (args.repo_id or args.config_name):
         raise ValueError("Specify only one of --parquet_file or the dataset parameters, not both.")
 
-    # Seleziona la pipeline
     if args.pipeline == "SaT":
         run_llm_function = run_llm_SaT
     elif args.pipeline == "RAG":
@@ -64,7 +63,7 @@ def main():
             window_size=args.window_size,
             overlap_sentences=args.overlap_sentences,
             batch_processing=args.batch_processing,
-            limit=args.limit  # Passa il limite
+            limit=args.limit
         )
     )
 

@@ -9,9 +9,6 @@ from langchain_openai import ChatOpenAI
 import json
 from utils import semaphore, KEYWORD_PATTERNS, keyword_based_filtering, semantic_similarity_filter_torch, segment_text_with_overlap, process_text_from_parquet, process_text_from_hf_parquet, extract_json_from_response, get_chunk_embedding, get_query_embedding, convert_keywords_to_patterns, normalize_keyword, programming_language_description, url_description, software_description, url_sentences, software_sentences, programming_language_sentences, save_extracted_entities, predefined_queries, query_embedding_cache, execute_with_retries
 from jinja2 import Environment, FileSystemLoader
-# from datasets import load_dataset
-
-# dataset = load_dataset("SoFairOA/softcite_dataset", "documents")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -56,7 +53,6 @@ async def verify_extracted_entities(llm, extracted_entities, batch_size=5):
 
                 verified_batch = extract_json_from_response(raw_content)
                 if verified_batch is not None:
-                    # Assign correct document_id to each entity
                     for entity, original_entity in zip(verified_batch, batch):
                         entity["document_id"] = original_entity["document_id"]
                     verified_entities.extend(verified_batch)
@@ -220,6 +216,7 @@ async def run_llm_with_parquet(
             repo_id=repo_id,
             config_name=config_name,
             split_name=split_name,
+            split_type=split_type,
             window_size=window_size,
             overlap_sentences=overlap_sentences,
             batch_processing=batch_processing,
@@ -233,7 +230,7 @@ async def run_llm_with_parquet(
             window_size,
             overlap_sentences,
             batch_processing,
-            limit=limit  #
+            limit=limit  
         )
     else:
         logger.error("Invalid parameters for loading dataset.")
@@ -277,7 +274,7 @@ async def run_llm_with_parquet(
     seen = set()
     prev_count = len(seen)
     extracted_software_examples = []  
-    max_iterations = 3 
+    max_iterations = 10 
     new_keywords = set()  
     new_queries = set()
     for iteration in range(max_iterations):
@@ -374,7 +371,7 @@ async def run_llm_with_parquet(
             iteration_results.append(
                 {
                     "document_id": document_id,
-                    "softwares": verified_entities,  # Update with verified entities
+                    "softwares": verified_entities,
                 }
             )
             

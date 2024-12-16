@@ -666,10 +666,9 @@ def segment_text_with_overlap(text, num_sentences_per_chunk, overlap_sentences):
 
     return chunks
 
-def process_text_from_parquet(parquet_file, split_type, window_size, overlap_sentences, batch_processing, cache_dir="cache", limit=None):
+def process_text_from_parquet(parquet_file, split_name, split_type, window_size, overlap_sentences, batch_processing, cache_dir="cache", limit=None):
     os.makedirs(cache_dir, exist_ok=True)
     
-    # Costruisci il nome del file di cache
     cache_filename = f"{Path(parquet_file).stem}_{split_type}_{window_size}_{overlap_sentences}"
     if limit is not None:
         cache_filename += f"_limit{limit}"
@@ -723,16 +722,13 @@ def process_text_from_parquet(parquet_file, split_type, window_size, overlap_sen
     return chunks_by_document, num_sentences_per_chunk, overlap_sentences
 
 
-
-def process_text_from_hf_parquet(repo_id, config_name, split_name, window_size, overlap_sentences, batch_processing, cache_dir="cache", limit=None):
+def process_text_from_hf_parquet(repo_id, config_name, split_name, split_type, window_size, overlap_sentences, batch_processing, cache_dir="cache", limit=None):
     """
-    Carica il dataset da Hugging Face utilizzando load_dataset,
-    converte in DataFrame Pandas, processa come fatto per il Parquet locale,
-    poi cachea i risultati.
+    Carica il dataset da Hugging Face utilizzando load_dataset (usando split_name per specificare lo split del dataset),
+    converte in DataFrame Pandas, quindi usa split_type per decidere se splittare il testo.
     """
     os.makedirs(cache_dir, exist_ok=True)
     
-    # Costruisci il nome del file di cache
     cache_filename = f"{config_name}_{split_name}_{window_size}_{overlap_sentences}"
     if limit is not None:
         cache_filename += f"_limit{limit}"
@@ -780,7 +776,7 @@ def process_text_from_hf_parquet(repo_id, config_name, split_name, window_size, 
                 logger.warning(f"Record missing 'id' or 'text' as string: {row}")
                 continue
             
-            if split_name == "complete":
+            if split_type == "complete":
                 chunks_by_document[document_id] = [document_text]
             else:
                 chunks = segment_text_with_overlap(document_text, num_sentences_per_chunk, overlap_sentences)
