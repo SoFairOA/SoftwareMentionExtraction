@@ -17,8 +17,8 @@ env = Environment(loader=FileSystemLoader("templates"))
 
 async def verify_extracted_entities(llm, extracted_entities, batch_size=5):
     verified_entities = []
-    system_verify_template = env.get_template("system_verify.j2")
-    human_verify_template = env.get_template("human_verify.j2")
+    # system_verify_template = env.get_template("system_verify.j2")
+    # human_verify_template = env.get_template("human_verify.j2")
 
     for i in range(0, len(extracted_entities), batch_size):
         batch = extracted_entities[i : i + batch_size]
