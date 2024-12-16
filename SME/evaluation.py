@@ -4,6 +4,7 @@ import re
 import string
 from argparse import ArgumentParser
 from pathlib import Path
+from typing import Any
 
 import evaluate
 import datasets
@@ -182,7 +183,7 @@ def convert_numpy_types(d: dict) -> dict:
     return d
 
 
-def map_seq_labels(path_to_mapping: str, labels: list[list[int]]) -> list[list[int]]:
+def map_seq_labels(path_to_mapping: str, labels: list[list[str]]) -> list[list[str]]:
     """
     Maps sequence labels.
 
@@ -208,8 +209,16 @@ def sequence_labeling(args):
 
     # translate the labels
     if not args.disable_translate and (hasattr(gold_dataset.features[args.gt_field], "feature") and hasattr(gold_dataset.features[args.gt_field].feature, "names")):
+        label_names = gold_dataset.features[args.gt_field].feature.names
+
+        if args.gold_mapping is not None:
+            with open(args.gold_mapping, "r") as f:
+                mapping = json.load(f)
+
+            label_names = [mapping.get(label, label) for label in label_names]
+
         results_dataset = results_dataset.map(
-            LabelsTranslator(args.prediction_field, gold_dataset.features[args.gt_field].feature.names),
+            LabelsTranslator(args.prediction_field, label_names),
             load_from_cache_file=False,
             keep_in_memory=True
         )
@@ -218,7 +227,7 @@ def sequence_labeling(args):
         gold_features[args.gt_field] = datasets.Sequence(datasets.Value("string"))
 
         gold_dataset = gold_dataset.map(
-            LabelsTranslator(args.gt_field, gold_dataset.features[args.gt_field].feature.names),
+            LabelsTranslator(args.gt_field, label_names),
             load_from_cache_file=False,
             keep_in_memory=True,
             features=gold_features
@@ -276,6 +285,23 @@ def map_software_attribute_names(path_to_mapping: str, software: list[list[dict]
     return new_software
 
 
+def count_statistics_for_doc_lvl(predictions: list[list[Any]], labels: list[list[Any]]) -> dict[str, int]:
+    """
+    Provides statistics about number of predictions, number of labels, number of empty samples, ...
+
+    :param predictions: list of preidctions for each sample
+    :param labels: list of labels for each sample
+    :return: statistics
+    """
+
+    return {
+        "number_of_predictions": sum(len(s) for s in predictions),
+        "number_of_labels": sum(len(s) for s in labels),
+        "samples_without_predictions": sum(len(s) == 0 for s in predictions),
+        "samples_without_labels": sum(len(s) == 0 for s in labels),
+    }
+
+
 def document_level(args):
     """
     Document level evaluation.
@@ -313,26 +339,32 @@ def document_level(args):
         "language": lambda x: x.lower()
     }
 
+    skipped_empty = 0
     for i in range(len(gold)):
+        if args.only_with_mention and len(gold[i]) == 0 and len(results[i]) == 0:
+            skipped_empty += 1
+            continue
+
         g_names_normalized = [normalize_sw_name(x["name"]) for x in gold[i]]
         gold_software_names.append(g_names_normalized)
         results_software_names.append([normalize_sw_name(x["name"]) for x in results[i]])
 
         for prop in gold_properties:
-            if len(gold[i]) > 0 and prop not in gold[i][0]:
-                continue
-
             prop_norm = norm_for_properties[prop] if args.normalize_properties else lambda x: x
 
-            gold_properties[prop].append([
-                f"{s_name} {prop_norm(p)}" for i_s, s_name in enumerate(g_names_normalized) for p in gold[i][i_s][prop]
-            ])
+            if len(gold[i]) > 0 and prop not in gold[i][0]:
+                gold_properties[prop].append([])
+                gold_properties_independent[prop].append([])
+            else:
+                gold_properties[prop].append([
+                    f"{s_name} {prop_norm(p)}" for i_s, s_name in enumerate(g_names_normalized) for p in gold[i][i_s][prop]
+                ])
+                gold_properties_independent[prop].append([
+                    prop_norm(p) for soft in gold[i] for p in soft[prop]
+                ])
+
             results_properties[prop].append([
                 f"{normalize_sw_name(soft['name'])} {prop_norm(p)}" for soft in results[i] for p in soft[prop]
-            ])
-
-            gold_properties_independent[prop].append([
-                prop_norm(p) for soft in gold[i] for p in soft[prop]
             ])
 
             results_properties_independent[prop].append([
@@ -345,18 +377,25 @@ def document_level(args):
         'predictions': datasets.Sequence(datasets.Value('string')),
         'references': datasets.Sequence(datasets.Value('string')),
     })
+
+    if args.only_with_mention:
+        print(f"Filtered only samples with at least one mention. After filtering there are {len(gold_software_names)} samples out of {len(gold_software_names)+skipped_empty}")
+
+    print(f"Number of samples: {len(gold_software_names)}")
     eval_res = doc_level.compute(predictions=results_software_names, references=gold_software_names)
     print("Document level software mentions extraction evaluation:")
+    eval_res.update(count_statistics_for_doc_lvl(results_software_names, gold_software_names))
     print(json.dumps(eval_res))
 
     # evaluate properties
     for prop in gold_properties:
         print(f"Document level {prop} extraction evaluation:")
-        print(doc_level.compute(predictions=results_properties[prop][:10], references=gold_properties[prop][:10]))
         eval_res = doc_level.compute(predictions=results_properties[prop], references=gold_properties[prop])
+        eval_res.update(count_statistics_for_doc_lvl(results_properties[prop], gold_properties[prop]))
         print("\t" + json.dumps(eval_res))
         print("\tIndependent evaluation:")
         eval_res = doc_level.compute(predictions=results_properties_independent[prop], references=gold_properties_independent[prop])
+        eval_res.update(count_statistics_for_doc_lvl(results_properties_independent[prop], gold_properties_independent[prop]))
         print("\t\t" + json.dumps(eval_res))
 
 
@@ -433,6 +472,7 @@ def main():
     document_level_parser.add_argument("--normalize_properties", help="Normalize properties.", action="store_true")
     document_level_parser.add_argument("--results_mapping", help="Mapping used to transform software attributes (json file). Could be used to convert labels from different datasets to the same format.", default=None)
     document_level_parser.add_argument("--gold_mapping", help="Mapping used to transform software attributes (json file). Could be used to convert labels from different datasets to the same format.", default=None)
+    document_level_parser.add_argument("--only_with_mention", help="Evaluates only samples with at least one mention. Either in prediction or ground truth.", action="store_true")
     document_level_parser.set_defaults(func=document_level)
 
     intent_parser = subparsers.add_parser("intent", help="Citation intent classification evaluation.")
