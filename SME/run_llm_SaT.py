@@ -125,7 +125,7 @@ async def process_chunk_with_llm_async(llm, chunk, index):
                 logging.info(f"Parsed JSON for chunk {index}: {extracted_json}")
                 return index, extracted_json
             else:
-                logging.error(f"JSON decoding error in chunk {index}: Nessun JSON valido trovato.")
+                logging.error(f"JSON decoding error in chunk {index}: No valid JSON was found.")
                 return index, []
 
         except Exception as e:
